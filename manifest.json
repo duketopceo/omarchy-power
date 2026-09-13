@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "lukedaduke.power",
+  "name": "Power",
+  "version": "1.1.0",
+  "author": "lukedaduke",
+  "license": "MIT",
+  "description": "Battery status, historical ASCII charge graph, top resource consumers, and power profiles",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Power",
+    "description": "Battery status, historical ASCII charge graph, top resource consumers, and power profiles",
+    "category": "System",
+    "allowMultiple": false
+  }
+}
