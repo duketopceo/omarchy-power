@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
+
+SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+SAFE_ENV = {"PATH": SAFE_PATH, "LC_ALL": "C", "LANG": "C"}
 
 STATE_DIR = Path.home() / ".local/state/omarchy"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,12 +113,62 @@ def make_ascii_graph(history, current_cap):
     ]
     return "\n".join(chart), spark_abs
 
+def _tool(name):
+    """Absolute path for an external helper, resolved under SAFE_PATH only."""
+    return shutil.which(name, path=SAFE_PATH)
+
+
+def _kill_tree(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _run(argv, timeout=2.0, max_bytes=262144):
+    """Run argv with minimal env, hard deadline, producer byte cap.
+
+    Child runs in its own process group so TERM/KILL reaches the tree.
+    Returns stdout text or None on failure/timeout/overflow.
+    """
+    if not argv or not argv[0]:
+        return None
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=SAFE_ENV, start_new_session=True,
+        )
+    except OSError:
+        return None
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        return None
+    if len(out) > max_bytes:
+        return None
+    return out.decode("utf-8", "replace")
+
+
 def get_top_consumers():
     consumers = []
     try:
-        cmd = ["ps", "-eo", "comm,%cpu,%mem"]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        lines = res.stdout.strip().split("\n")
+        cmd = [_tool("ps"), "-eo", "comm,%cpu,%mem"]
+        res = _run(cmd)
+        if res is None:
+            raise RuntimeError("ps failed")
+        lines = res.strip().split("\n")
         totals = {}
         for line in lines[1:]:
             parts = line.split()

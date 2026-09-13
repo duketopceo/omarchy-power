@@ -133,13 +133,36 @@ Panel {
     return modeLabel()
   }
 
+  // Absolute tool paths and no shell: a PATH-preceding shadow binary or a
+  // hostile PATH must never run inside this long-lived shell process.
+  // HOME/XDG_STATE_HOME stay in the fixed env: omarchy-powerprofiles-set
+  // persists profile choice under $HOME/.local/state/omarchy/powerprofiles
+  // and battery_helper.py writes ~/.local/state/omarchy/battery_history.json.
+  readonly property string py: "/usr/bin/python3"
+  readonly property string pluginRoot: {
+    var p = Qt.resolvedUrl(".").toString()
+    if (p.indexOf("file://") === 0)
+      p = p.substring(7)
+    if (p.length > 1 && p.charAt(p.length - 1) === "/")
+      p = p.substring(0, p.length - 1)
+    return p
+  }
+  readonly property var procEnv: ({
+    "PATH": "/usr/bin:/bin",
+    "HOME": Quickshell.env("HOME"),
+    "XDG_STATE_HOME": Quickshell.env("XDG_STATE_HOME"),
+    "XDG_RUNTIME_DIR": Quickshell.env("XDG_RUNTIME_DIR"),
+    "LANG": null,
+    "LC_ALL": "C"
+  })
+
   function refresh() {
     if (!batteryPresent) return
 
-    if (!batteryProc.running) batteryProc.running = true
-    if (!profilesProc.running) profilesProc.running = true
-    if (!systemProc.running) systemProc.running = true
-    if (!powerDataProc.running) powerDataProc.running = true
+    if (!batteryProc.running) { batteryProc.running = true; batteryDeadline.restart() }
+    if (!profilesProc.running) { profilesProc.running = true; profilesDeadline.restart() }
+    if (!systemProc.running) { systemProc.running = true; systemDeadline.restart() }
+    if (!powerDataProc.running) { powerDataProc.running = true; powerDataDeadline.restart() }
   }
 
   function updateKeyValue(raw, targetName) {
@@ -167,7 +190,8 @@ Panel {
 
   function setProfile(profile) {
     if (!profile || actionProc.running) return
-    actionProc.command = ["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]
+    actionProc.command = ["/usr/bin/omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]
+    actionDeadline.restart()
     actionProc.running = true
   }
 
@@ -209,53 +233,106 @@ Panel {
 
   Process {
     id: batteryProc
-    command: ["omarchy-battery-status", "--shell"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "battery") }
+    command: ["/usr/bin/omarchy-battery-status", "--shell"]
+    clearEnvironment: true
+    environment: root.procEnv
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        batteryDeadline.stop()
+        var raw = String(text || "")
+        if (raw.length > 100000) return
+        root.updateKeyValue(raw, "battery")
+      }
+    }
+    onExited: batteryDeadline.stop()
   }
 
   Process {
     id: profilesProc
-    command: ["omarchy-powerprofiles-list", "--active-state"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
+    command: ["/usr/bin/omarchy-powerprofiles-list", "--active-state"]
+    clearEnvironment: true
+    environment: root.procEnv
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        profilesDeadline.stop()
+        var raw = String(text || "")
+        if (raw.length > 100000) return
+        root.updateProfiles(raw)
+      }
+    }
+    onExited: profilesDeadline.stop()
   }
 
   Process {
     id: systemProc
-    command: ["omarchy-system-stats"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "system") }
+    command: ["/usr/bin/omarchy-system-stats"]
+    clearEnvironment: true
+    environment: root.procEnv
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        systemDeadline.stop()
+        var raw = String(text || "")
+        if (raw.length > 100000) return
+        root.updateKeyValue(raw, "system")
+      }
+    }
+    onExited: systemDeadline.stop()
   }
 
   Process {
     id: powerDataProc
-    command: ["python3", Quickshell.env("HOME") + "/.config/omarchy/plugins/lukedaduke.power/battery_helper.py"]
+    command: [root.py, root.pluginRoot + "/battery_helper.py"]
+    clearEnvironment: true
+    environment: root.procEnv
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        powerDataDeadline.stop()
+        var raw = String(text || "")
+        if (raw.length > 200000) return
         try {
-          root.powerData = JSON.parse(text)
+          root.powerData = JSON.parse(raw)
         } catch(e) {}
       }
     }
+    onExited: powerDataDeadline.stop()
   }
 
   Process {
     id: actionProc
-    onExited: root.refresh()
+    clearEnvironment: true
+    environment: root.procEnv
+    onExited: { actionDeadline.stop(); root.refresh() }
   }
 
   // History must accrue whether or not the panel is open, or the graph only
   // ever samples the moments someone looks at it.
   Process {
     id: samplerProc
-    command: ["python3", Quickshell.env("HOME") + "/.config/omarchy/plugins/lukedaduke.power/battery_helper.py", "--sample"]
+    command: [root.py, root.pluginRoot + "/battery_helper.py", "--sample"]
+    clearEnvironment: true
+    environment: root.procEnv
+    onExited: samplerDeadline.stop()
   }
+
+  // Hard whole-job deadlines: a hung helper is killed and reaped rather than
+  // left running indefinitely.
+  Timer { id: batteryDeadline; interval: 15000; onTriggered: if (batteryProc.running) batteryProc.signal(9) }
+  Timer { id: profilesDeadline; interval: 15000; onTriggered: if (profilesProc.running) profilesProc.signal(9) }
+  Timer { id: systemDeadline; interval: 15000; onTriggered: if (systemProc.running) systemProc.signal(9) }
+  Timer { id: powerDataDeadline; interval: 20000; onTriggered: if (powerDataProc.running) powerDataProc.signal(9) }
+  Timer { id: actionDeadline; interval: 15000; onTriggered: if (actionProc.running) actionProc.signal(9) }
+  Timer { id: samplerDeadline; interval: 20000; onTriggered: if (samplerProc.running) samplerProc.signal(9) }
 
   Timer {
     interval: 60000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: if (!samplerProc.running) samplerProc.running = true
+    onTriggered: if (!samplerProc.running) { samplerProc.running = true; samplerDeadline.restart() }
   }
 
   Timer { interval: 5000; running: root.opened; repeat: true; onTriggered: root.refresh() }
