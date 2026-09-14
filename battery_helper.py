@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -13,6 +14,47 @@ SAFE_ENV = {"PATH": SAFE_PATH, "LC_ALL": "C", "LANG": "C"}
 STATE_DIR = Path.home() / ".local/state/omarchy"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 HISTORY_FILE = STATE_DIR / "battery_history.json"
+HISTORY_NAME = "battery_history.json"
+HISTORY_MAX_BYTES = 64 * 1024  # 240 points serialize to ~15 KiB
+
+
+def _open_state_dir():
+    """Descriptor for STATE_DIR — no symlinks, must be ours."""
+    fd = os.open(STATE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        os.close(fd)
+        raise PermissionError("state dir is not a user-owned real directory")
+    return fd
+
+
+def _read_history(dirfd):
+    """Bounded, no-follow read of the history file; [] on any anomaly."""
+    try:
+        fd = os.open(HISTORY_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dirfd)
+    except OSError:
+        return []
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_size > HISTORY_MAX_BYTES:
+            return []
+        return json.loads(os.read(fd, HISTORY_MAX_BYTES + 1).decode())
+    except Exception:
+        return []
+    finally:
+        os.close(fd)
+
+
+def _write_history(dirfd, history):
+    """Publish via exclusive same-dir temp file + atomic rename."""
+    tmp = f".{HISTORY_NAME}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dirfd)
+    try:
+        os.write(fd, json.dumps(history).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, HISTORY_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
 
 def get_current_battery():
     cap = 50
@@ -48,27 +90,35 @@ def get_current_battery():
 def update_history(current_cap, status):
     history = []
     now = int(time.time())
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                history = json.load(f)
-        except Exception:
+    try:
+        dirfd = _open_state_dir()
+    except PermissionError:
+        return history
+    try:
+        history = _read_history(dirfd)
+        if not isinstance(history, list):
             history = []
-    
+    finally:
+        os.close(dirfd)
+
     # Only append if last point is at least 60s ago or empty
     if not history or (now - history[-1].get("time", 0)) >= 60 or history[-1].get("cap") != current_cap:
         history.append({"time": now, "cap": current_cap, "status": status})
-    
+
     # Keep ~4h at one point per minute.
     if len(history) > 240:
         history = history[-240:]
-    
+
     try:
-        with open(HISTORY_FILE, "w") as f:
-            json.dump(history, f)
+        dirfd = _open_state_dir()
+    except PermissionError:
+        return history
+    try:
+        _write_history(dirfd, history)
     except Exception:
         pass
-    
+    finally:
+        os.close(dirfd)
     return history
 
 GRAPH_WIDTH = 24
