@@ -15,7 +15,6 @@ Panel {
   manageIpc: false
   property var powerData: ({})
   property var batteryInfo: ({})
-  property var systemInfo: ({})
   property var profiles: []
   property string activeProfile: ""
   property int profileIndex: 0
@@ -161,17 +160,15 @@ Panel {
 
     if (!batteryProc.running) { batteryProc.running = true; batteryDeadline.restart() }
     if (!profilesProc.running) { profilesProc.running = true; profilesDeadline.restart() }
-    if (!systemProc.running) { systemProc.running = true; systemDeadline.restart() }
     if (!powerDataProc.running) { powerDataProc.running = true; powerDataDeadline.restart() }
   }
 
-  function updateKeyValue(raw, targetName) {
+  function updateKeyValue(raw) {
     var next = Model.parseKeyValue(raw)
     // Keep last known good data if a refresh briefly returns nothing — happens
     // around AC plug/unplug events. Avoids the section collapsing mid-transition.
     if (Object.keys(next).length === 0) return
-    if (targetName === "battery") batteryInfo = next
-    else systemInfo = next
+    batteryInfo = next
   }
 
   function updateProfiles(raw) {
@@ -242,7 +239,7 @@ Panel {
         batteryDeadline.stop()
         var raw = String(text || "")
         if (raw.length > 100000) return
-        root.updateKeyValue(raw, "battery")
+        root.updateKeyValue(raw)
       }
     }
     onExited: batteryDeadline.stop()
@@ -263,23 +260,6 @@ Panel {
       }
     }
     onExited: profilesDeadline.stop()
-  }
-
-  Process {
-    id: systemProc
-    command: ["/usr/bin/omarchy-system-stats"]
-    clearEnvironment: true
-    environment: root.procEnv
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        systemDeadline.stop()
-        var raw = String(text || "")
-        if (raw.length > 100000) return
-        root.updateKeyValue(raw, "system")
-      }
-    }
-    onExited: systemDeadline.stop()
   }
 
   Process {
@@ -322,7 +302,6 @@ Panel {
   // left running indefinitely.
   Timer { id: batteryDeadline; interval: 15000; onTriggered: if (batteryProc.running) batteryProc.signal(9) }
   Timer { id: profilesDeadline; interval: 15000; onTriggered: if (profilesProc.running) profilesProc.signal(9) }
-  Timer { id: systemDeadline; interval: 15000; onTriggered: if (systemProc.running) systemProc.signal(9) }
   Timer { id: powerDataDeadline; interval: 20000; onTriggered: if (powerDataProc.running) powerDataProc.signal(9) }
   Timer { id: actionDeadline; interval: 15000; onTriggered: if (actionProc.running) actionProc.signal(9) }
   Timer { id: samplerDeadline; interval: 20000; onTriggered: if (samplerProc.running) samplerProc.signal(9) }

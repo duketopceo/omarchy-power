@@ -28,6 +28,24 @@ def _open_state_dir():
     return fd
 
 
+def _clean_entry(p):
+    """Normalize one history entry to {time, cap, status}; None if malformed.
+
+    Entries are only skipped here — a bad point must never take down the
+    whole read, or one corrupt line would zero the JSON output until the
+    file is deleted.
+    """
+    if not isinstance(p, dict):
+        return None
+    try:
+        t = int(p["time"])
+        cap = int(p["cap"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    status = p.get("status", "")
+    return {"time": t, "cap": cap, "status": status if isinstance(status, str) else ""}
+
+
 def _read_history(dirfd):
     """Bounded, no-follow read of the history file; [] on any anomaly."""
     try:
@@ -38,7 +56,10 @@ def _read_history(dirfd):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_size > HISTORY_MAX_BYTES:
             return []
-        return json.loads(os.read(fd, HISTORY_MAX_BYTES + 1).decode())
+        data = json.loads(os.read(fd, HISTORY_MAX_BYTES + 1).decode())
+        if not isinstance(data, list):
+            return []
+        return [e for e in (_clean_entry(p) for p in data) if e is not None]
     except Exception:
         return []
     finally:
