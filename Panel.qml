@@ -242,6 +242,14 @@ Panel {
         root.updateKeyValue(raw)
       }
     }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("omarchy-battery-status stderr: " + err.substring(0, 500))
+      }
+    }
     onExited: batteryDeadline.stop()
   }
 
@@ -257,6 +265,14 @@ Panel {
         var raw = String(text || "")
         if (raw.length > 100000) return
         root.updateProfiles(raw)
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("omarchy-powerprofiles-list stderr: " + err.substring(0, 500))
       }
     }
     onExited: profilesDeadline.stop()
@@ -278,6 +294,16 @@ Panel {
         } catch(e) {}
       }
     }
+    // Helper tracebacks land here — collect so a helper crash is visible
+    // in the journal instead of looking like an empty stats payload.
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("battery_helper stderr: " + err.substring(0, 500))
+      }
+    }
     onExited: powerDataDeadline.stop()
   }
 
@@ -285,6 +311,14 @@ Panel {
     id: actionProc
     clearEnvironment: true
     environment: root.procEnv
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("omarchy-powerprofiles-set stderr: " + err.substring(0, 500))
+      }
+    }
     onExited: { actionDeadline.stop(); root.refresh() }
   }
 
@@ -295,6 +329,14 @@ Panel {
     command: [root.py, root.pluginRoot + "/battery_helper.py", "--sample"]
     clearEnvironment: true
     environment: root.procEnv
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("battery_helper --sample stderr: " + err.substring(0, 500))
+      }
+    }
     onExited: samplerDeadline.stop()
   }
 
