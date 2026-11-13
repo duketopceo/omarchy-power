@@ -439,7 +439,8 @@ def update_history(current_cap, status, power_w=None):
     return history
 
 
-GRAPH_WIDTH = 24
+# Wide enough to fill the ~380px panel card at bodySmall mono (~9px/glyph).
+GRAPH_WIDTH = 36
 
 
 def analyze_history(history, current_cap, telemetry=None):

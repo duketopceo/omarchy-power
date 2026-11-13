@@ -18,7 +18,7 @@ omarchy plugin enable lukedaduke.power
 - Power profiles via `omarchy-powerprofiles-list` /
   `omarchy-powerprofiles-set` (persists under
   `~/.local/state/omarchy/powerprofiles`)
-- Exposes an `omarchy.power` IPC target for keybind-driven profile actions
+- Exposes a `lukedaduke.power` IPC target (open, close, toggle, togglePercentage); the `omarchy.power` target belongs to the first-party Omarchy 4.5 power widget
 
 ## External dependencies
 
